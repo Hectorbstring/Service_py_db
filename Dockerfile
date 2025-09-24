@@ -1,19 +1,25 @@
-FROM python:3.11-slim
+# Imagem base Python
+FROM python:3.12-slim
 
-# Definir diretório de trabalho
+# Diretório de trabalho dentro do container
 WORKDIR /app
 
-# Copiar dependências
+# Copia o requirements.txt e instala dependências
 COPY requirements.txt .
-
-# Instalar dependências
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar código
+# Copia todo o código
 COPY . .
 
-# Variáveis de ambiente
-ENV PYTHONUNBUFFERED=1
+# Variáveis de ambiente (opcional, podem ser substituídas no docker run)
+ENV MONGO_URI="mongodb://facetecadmin:strongpassword@172.16.1.4:27017/facetec-sdk-data?authSource=admin"
+ENV MONGO_DB_NAME="facetec-sdk-data"
+ENV MONGO_COLLECTION="Session"
+ENV FACETEC_SIGNATURE_SECRET="minhaassinaturasecreta"
+ENV PORT=3333
 
-# Rodar FastAPI com Uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7777"]
+# Expõe a porta que o FastAPI vai rodar
+EXPOSE 3333
+
+# Comando para rodar a aplicação
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3333"]
