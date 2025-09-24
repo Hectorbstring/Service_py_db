@@ -73,7 +73,7 @@ async def get_session(third_party_reference: str, request: Request):
         path = item.get("httpCallInfo", {}).get("path", "")
         logger.info(f"Processing session index={index}, path={path}")
 
-        if path == "/liveness":
+        if path == "/liveness-3d":
             result = item.get("result", {})
             response["liveness"] = {
                 "date": item.get("callData", {}).get("date"),
