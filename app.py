@@ -35,11 +35,16 @@ async def check_mongo_connection():
         await mongo_client.admin.command({"ping": 1})
         logger.info("MongoDB connection established")
 
+def mask_value(value: str, visible: int = 4) -> str:
+    """Mascara um valor, deixando apenas os últimos `visible` caracteres legíveis."""
+    if not value:
+        return ""
+    return "*" * (len(value) - visible) + value[-visible:]
 
 @app.get("/dbservice/{third_party_reference}")
 async def get_session(third_party_reference: str, request: Request):
     x_signature = request.headers.get("x-signature")
-    logger.info(f"Incoming request for thirdPartyReference={third_party_reference}, signature={x_signature}")
+    logger.info(f"Incoming request for thirdPartyReference={mask_value(third_party_reference)}, signature={mask_value(x_signature)}")
 
     # ---- Autenticação ----
     if x_signature != SECRET_SIGNATURE:
@@ -52,7 +57,7 @@ async def get_session(third_party_reference: str, request: Request):
     # ---- Buscar sessões ----
     sessions_cursor = db[COLLECTION].find({"externalDatabaseRefID": third_party_reference})
     sessions = await sessions_cursor.to_list(length=None)
-    logger.info(f"Found {len(sessions)} session(s) for thirdPartyReference={third_party_reference}")
+    logger.info(f"Found {len(sessions)} session(s) for thirdPartyReference={mask_value(third_party_reference)}")
 
     if not sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -112,7 +117,7 @@ async def get_session(third_party_reference: str, request: Request):
         else:
             logger.warning(f"Unknown path found in session item: {path}")
 
-    logger.info(f"Final response prepared for thirdPartyReference={third_party_reference}")
+    logger.info(f"Final response prepared for thirdPartyReference={mask_value(third_party_reference)}")
 
     # ---- Serializar corretamente datetime ----
     return JSONResponse(content=jsonable_encoder(response))

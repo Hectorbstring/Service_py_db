@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  python-facetec:
+    container_name: python-facetec-container
+    image: python-facetec-service   # substitua pelo nome da sua imagem
+    ports:
+      - "5000:3333"                # expõe porta para fora
+    env_file:
+      - .env.local                 # suas variáveis de ambiente
+    networks:
+      - my-shared-net
+    restart: unless-stopped        # reinicia automaticamente se cair
+
+networks:
+  my-shared-net:
+    external: true
