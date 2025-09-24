@@ -1,11 +1,40 @@
+import os
+import logging
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from datetime import datetime
-import json
+from motor.motor_asyncio import AsyncIOMotorClient
+from dotenv import load_dotenv
+from fastapi.encoders import jsonable_encoder
 
-def serialize_datetime(obj):
-    if isinstance(obj, datetime):
-        return obj.isoformat()  # ou str(obj) se preferir formato simples
-    raise TypeError(f"Type {type(obj)} not serializable")
+load_dotenv()
+
+# ---- Configurações ----
+MONGO_URI = os.getenv("MONGO_URI")
+DB_NAME = os.getenv("MONGO_DB_NAME")
+COLLECTION = os.getenv("MONGO_COLLECTION")
+SECRET_SIGNATURE = os.getenv("FACETEC_SIGNATURE_SECRET")
+
+# ---- Logging ----
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ---- FastAPI app ----
+app = FastAPI(title="Facetec DB Service")
+
+# ---- MongoDB client global ----
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client[DB_NAME]
+
+# ---- Helper para checar conexão MongoDB ----
+async def check_mongo_connection():
+    try:
+        await db.command({"ping": 1})
+        logger.info("MongoDB already connected")
+    except Exception:
+        logger.info("MongoDB not connected. Connecting...")
+        await mongo_client.admin.command({"ping": 1})
+        logger.info("MongoDB connection established")
+
 
 @app.get("/dbservice/{third_party_reference}")
 async def get_session(third_party_reference: str, request: Request):
@@ -85,5 +114,5 @@ async def get_session(third_party_reference: str, request: Request):
 
     logger.info(f"Final response prepared for thirdPartyReference={third_party_reference}")
 
-    # ---- Converter datetime para string ----
-    return JSONResponse(content=json.loads(json.dumps(response, default=serialize_datetime)))
+    # ---- Serializar corretamente datetime ----
+    return JSONResponse(content=jsonable_encoder(response))
