@@ -1,45 +1,44 @@
 import os
+import json
 import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from motor.motor_asyncio import AsyncIOMotorClient
-from dotenv import load_dotenv
 from fastapi.encoders import jsonable_encoder
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from dotenv import load_dotenv
 
 load_dotenv()
 
 # ---- Configurações ----
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = os.getenv("MONGO_DB_NAME")
-COLLECTION = os.getenv("MONGO_COLLECTION")
+DB_SERVER = os.getenv("SQL_SERVER")
+DB_NAME = os.getenv("SQL_DB_NAME")
+DB_USER = os.getenv("SQL_USER")
+DB_PASSWORD = os.getenv("SQL_PASSWORD")
 SECRET_SIGNATURE = os.getenv("FACETEC_SIGNATURE_SECRET")
+
+# Exemplo de DSN (ajuste conforme o driver disponível)
+DATABASE_URL = (
+    f"mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_SERVER}/{DB_NAME}"
+    "?driver=ODBC+Driver+17+for+SQL+Server"
+)
 
 # ---- Logging ----
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---- FastAPI app ----
-app = FastAPI(title="Facetec DB Service")
+app = FastAPI(title="Facetec SQL DB Service")
 
-# ---- MongoDB client global ----
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client[DB_NAME]
+# ---- SQLAlchemy Engine ----
+engine = create_engine(DATABASE_URL, fast_executemany=True)
 
-# ---- Helper para checar conexão MongoDB ----
-async def check_mongo_connection():
-    try:
-        await db.command({"ping": 1})
-        logger.info("MongoDB already connected")
-    except Exception:
-        logger.info("MongoDB not connected. Connecting...")
-        await mongo_client.admin.command({"ping": 1})
-        logger.info("MongoDB connection established")
-
+# ---- Helper para mascarar valores sensíveis ----
 def mask_value(value: str, visible: int = 4) -> str:
-    """Mascara um valor, deixando apenas os últimos `visible` caracteres legíveis."""
     if not value:
         return ""
     return "*" * (len(value) - visible) + value[-visible:]
+
 
 @app.get("/dbservice/{third_party_reference}")
 async def get_session(third_party_reference: str, request: Request):
@@ -48,76 +47,83 @@ async def get_session(third_party_reference: str, request: Request):
 
     # ---- Autenticação ----
     if x_signature != SECRET_SIGNATURE:
-        logger.warning(f"Invalid signature. Expected: {SECRET_SIGNATURE}")
+        logger.warning("Invalid signature received")
         raise HTTPException(status_code=403, detail="Invalid signature")
 
-    # ---- Verificar conexão MongoDB ----
-    await check_mongo_connection()
+    try:
+        with engine.connect() as conn:
+            # ---- Buscar sessões ----
+            query = text("""
+                SELECT * FROM FacetecSessions WHERE externalDatabaseRefID = :ref
+            """)
+            rows = conn.execute(query, {"ref": third_party_reference}).fetchall()
 
-    # ---- Buscar sessões ----
-    sessions_cursor = db[COLLECTION].find({"externalDatabaseRefID": third_party_reference})
-    sessions = await sessions_cursor.to_list(length=None)
-    logger.info(f"Found {len(sessions)} session(s) for thirdPartyReference={mask_value(third_party_reference)}")
+            if not rows:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-    if not sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+            logger.info(f"Found {len(rows)} session(s) for thirdPartyReference={mask_value(third_party_reference)}")
 
-    response = {
-        "liveness": None,
-        "enrollment3d": None,
-        "match3d2dIdscan": None
-    }
-
-    # ---- Iterar sobre cada item da sessão ----
-    for index, item in enumerate(sessions):
-        path = item.get("httpCallInfo", {}).get("path", "")
-        logger.info(f"Processing session index={index}, path={path}")
-
-        if path == "/liveness-3d":
-            result = item.get("result", {})
-            response["liveness"] = {
-                "date": item.get("callData", {}).get("date"),
-                "additionalSessionData": item.get("additionalSessionData"),
-                "result": result,
-                "auditTrailImage": result.get("auditTrailImage", ""),
-                "ageEstimation": item.get("ageEstimation"),
-                "success": item.get("success", False)
+            response = {
+                "thirdPartyReference": third_party_reference,
+                "liveness": None,
+                "enrollment3d": None,
+                "match3d2dIdscan": None
             }
 
-        elif path == "/enrollment-3d":
-            result = item.get("result", {})
-            response["enrollment3d"] = {
-                "date": item.get("callData", {}).get("date"),
-                "additionalSessionData": item.get("additionalSessionData"),
-                "result": result,
-                "externalDatabaseRefID": item.get("externalDatabaseRefID"),
-                "auditTrailImage": result.get("auditTrailImage", ""),
-                "success": item.get("success", False)
-            }
+            # ---- Iterar sobre cada item ----
+            for index, row in enumerate(rows):
+                path = getattr(row, "httpCallInfoPath", "")
+                logger.info(f"Processing session index={index}, path={path}")
 
-        elif path == "/match-3d-2d-idscan":
-            data = item.get("data", {})
-            response["match3d2dIdscan"] = {
-                "idScanResultsSoFar": item.get("idScanResultsSoFar"),
-                "templateInfo": data.get("templateInfo", {}),
-                "photoIDTamperingEvidenceFrontImage": data.get("photoIDTamperingEvidenceFrontImage", ""),
-                "photoIDTamperingEvidenceBackImage": data.get("photoIDTamperingEvidenceBackImage", ""),
-                "userConfirmedExtractedData": data.get("userConfirmedExtractedData", {}),
-                "photoIDSecondarySignatureCrop": data.get("photoIDSecondarySignatureCrop", ""),
-                "extractedNFCImage": data.get("extractedNFCImage", ""),
-                "autoExtractedOCRData": data.get("autoExtractedOCRData", {}),
-                "photoIDPrimarySignatureCrop": data.get("photoIDPrimarySignatureCrop", ""),
-                "photoIDFaceCrop": data.get("photoIDFaceCrop", ""),
-                "photoIDFrontImage": data.get("photoIDFrontImage", ""),
-                "photoIDFrontCrop": data.get("photoIDFrontCrop", ""),
-                "photoIDBackImage": data.get("photoIDBackImage", ""),
-                "photoIDBackCrop": data.get("photoIDBackCrop", "")
-            }
+                # Campos JSON (precisam ser convertidos)
+                result = json.loads(row.result) if row.result else {}
+                data = json.loads(row.data) if row.data else {}
+                additionalSessionData = json.loads(row.additionalSessionData) if row.additionalSessionData else {}
 
-        else:
-            logger.warning(f"Unknown path found in session item: {path}")
+                if path == "/liveness-3d":
+                    response["liveness"] = {
+                        "date": row.callDataDate.isoformat() if row.callDataDate else None,
+                        "additionalSessionData": additionalSessionData,
+                        "result": result,
+                        "auditTrailImage": result.get("auditTrailImage", ""),
+                        "success": bool(row.success)
+                    }
 
-    logger.info(f"Final response prepared for thirdPartyReference={mask_value(third_party_reference)}")
+                elif path == "/enrollment-3d":
+                    response["enrollment3d"] = {
+                        "date": row.callDataDate.isoformat() if row.callDataDate else None,
+                        "additionalSessionData": additionalSessionData,
+                        "result": result,
+                        "externalDatabaseRefID": row.externalDatabaseRefID,
+                        "auditTrailImage": result.get("auditTrailImage", ""),
+                        "success": bool(row.success)
+                    }
 
-    # ---- Serializar corretamente datetime ----
-    return JSONResponse(content=jsonable_encoder(response))
+                elif path == "/match-3d-2d-idscan":
+                    response["match3d2dIdscan"] = {
+                        "templateInfo": data.get("templateInfo", {}),
+                        "photoIDTamperingEvidenceFrontImage": data.get("photoIDTamperingEvidenceFrontImage", ""),
+                        "photoIDTamperingEvidenceBackImage": data.get("photoIDTamperingEvidenceBackImage", ""),
+                        "userConfirmedExtractedData": data.get("userConfirmedExtractedData", {}),
+                        "photoIDSecondarySignatureCrop": data.get("photoIDSecondarySignatureCrop", ""),
+                        "autoExtractedOCRData": data.get("autoExtractedOCRData", {}),
+                        "photoIDPrimarySignatureCrop": data.get("photoIDPrimarySignatureCrop", ""),
+                        "photoIDFaceCrop": data.get("photoIDFaceCrop", ""),
+                        "photoIDFrontImage": data.get("photoIDFrontImage", ""),
+                        "photoIDBackImage": data.get("photoIDBackImage", "")
+                    }
+
+                else:
+                    logger.warning(f"Unknown path found in session item: {path}")
+
+            logger.info(f"Final response prepared for thirdPartyReference={mask_value(third_party_reference)}")
+
+            return JSONResponse(content=jsonable_encoder(response))
+
+    except SQLAlchemyError as e:
+        logger.exception("Database query failed")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    except Exception as e:
+        logger.exception("Unexpected error")
+        raise HTTPException(status_code=500, detail=str(e))
