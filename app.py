@@ -44,7 +44,8 @@ def mask_value(value: str, visible: int = 4) -> str:
 async def get_session(third_party_reference: str, request: Request):
     x_signature = request.headers.get("x-signature")
     logger.info(f"Incoming request for thirdPartyReference={mask_value(third_party_reference)}, signature={mask_value(x_signature)}")
-
+    logger.info(x_signature)
+    logger.info(SECRET_SIGNATURE)
     # ---- Autenticação ----
     if x_signature != SECRET_SIGNATURE:
         logger.warning("Invalid signature received")
